@@ -296,11 +296,13 @@ def _chat_dispatch_to_a0(
     user_text: str,
     assistant_id: str,
     attachments: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
 ) -> bool:
     """Kick off an A0 turn for the given context. Returns True on success.
     The assistant reply arrives as live events emitted by the mobile
     response_stream + monologue_end extensions; nothing is awaited here."""
     from agent import UserMessage
+    from python.helpers import message_queue as mq
 
     bus = get_chat_bus(context_id)
     with bus['turn_lock']:
@@ -312,6 +314,10 @@ def _chat_dispatch_to_a0(
 
     try:
         ctx = _chat_get_or_create_context(context_id)
+        # Add a type="user" log item so the WebUI renders the phone-typed
+        # prompt as its own bubble (mirroring what /api/message does for
+        # WebUI-typed messages).
+        mq.log_user_message(ctx, user_text, list(attachments or []), message_id=user_id)
         ctx.communicate(UserMessage(message=user_text, attachments=list(attachments or [])))
         return True
     except Exception as e:
@@ -694,7 +700,7 @@ def _chat_send_view():
     # delta events (from the response_stream extension) and a final event
     # (from the monologue_end extension), both of which publish to the
     # same pub/sub the client is subscribed to via /mobile/chat/stream.
-    if not _chat_dispatch_to_a0(context_id, content, assistant_id, attachment_paths):
+    if not _chat_dispatch_to_a0(context_id, content, assistant_id, attachment_paths, user_id=user_id):
         # _chat_dispatch_to_a0 already cleared busy + published an error final.
         return Response(
             json.dumps({'ok': False, 'error': 'a0 dispatch failed'}),

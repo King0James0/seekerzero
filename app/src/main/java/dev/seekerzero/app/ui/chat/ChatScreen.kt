@@ -5,6 +5,12 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import android.widget.Toast
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -251,6 +257,7 @@ private fun MessageList(messages: List<ChatMessage>) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(message: ChatMessage) {
     val isUser = message.role == ChatRole.USER
@@ -258,6 +265,15 @@ private fun MessageBubble(message: ChatMessage) {
     val hasText = message.content.isNotEmpty() || !message.isFinal
     val hasAttachments = message.attachments.isNotEmpty()
     val columnAlignment = if (isUser) Alignment.End else Alignment.Start
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    val longPressCopyable = message.isFinal && message.content.isNotEmpty()
+    val iconCopyable = !isUser && longPressCopyable
+
+    val copy: () -> Unit = {
+        clipboard.setText(AnnotatedString(message.content))
+        Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -273,12 +289,17 @@ private fun MessageBubble(message: ChatMessage) {
             horizontalAlignment = columnAlignment
         ) {
             if (hasText) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(bubbleColor)
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                ) {
+                val bubbleModifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(bubbleColor)
+                    .let {
+                        if (longPressCopyable) it.combinedClickable(
+                            onClick = {},
+                            onLongClick = copy
+                        ) else it
+                    }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                Box(modifier = bubbleModifier) {
                     val displayContent = if (!message.isFinal && message.content.isEmpty()) {
                         "…"
                     } else if (!message.isFinal) {
@@ -301,6 +322,19 @@ private fun MessageBubble(message: ChatMessage) {
                     message.attachments.forEach { a ->
                         HistoricalAttachmentChip(a)
                     }
+                }
+            }
+            if (iconCopyable) {
+                IconButton(
+                    onClick = copy,
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.ContentCopy,
+                        contentDescription = "copy message",
+                        tint = SeekerZeroColors.TextSecondary,
+                        modifier = Modifier.size(14.dp)
+                    )
                 }
             }
         }

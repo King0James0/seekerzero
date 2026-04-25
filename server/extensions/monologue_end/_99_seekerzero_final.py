@@ -7,19 +7,27 @@
 # write a row to the mobile JSONL mirror, publish a `final` event, and
 # clear the busy flag.
 #
+# Two flows are supported:
+#   1. Phone-initiated: bus['turn_state'] was set by _chat_dispatch_to_a0
+#      when the phone called /mobile/chat/send. We use the pre-allocated
+#      assistant_id and emit the final.
+#   2. WebUI-initiated on a mobile context: turn_state is None (the WebUI
+#      doesn't go through our send view). We bootstrap fresh ids, pull the
+#      most recent type="user" log item (added by mq.log_user_message),
+#      mirror both user + assistant entries, and publish both events so an
+#      active phone subscriber catches up.
+#
 # Shared state with the Flask handler lives on context.data[CHAT_BUS_KEY] —
 # see the forwarder extension's header for the why.
 #
 # Only fires for the mobile-* contexts and only for the top-level
 # agent (subordinate turns also call monologue_end, and we don't want to
 # terminate the user-visible reply on a subordinate's completion).
-#
-# Canonical source lives at /a0/usr/patches/seekerzero_final.py and is
-# copied into /a0/usr/extensions/monologue_end/ by agent-zero-post-start.sh.
 
 import json
 import queue
 import time
+import uuid
 from pathlib import Path
 
 from agent import LoopData
@@ -34,19 +42,7 @@ _CHAT_DIR = Path('/a0/usr/seekerzero/chat')
 def _extract_final_text(agent) -> str:
     """Pull the final assistant text from the most recent response log item,
     defensively expand any surviving §§include(...) references, then strip
-    A0's task-stats footer so the phone only sees the actual reply.
-
-    The web UI's LiveResponse extension appends to a log item of type
-    'response' on each parseable chunk; by monologue_end, its content is
-    the complete assistant reply. A0's _05_task_stats_display extension
-    then appends a cost / timing / budget footer after a `---` horizontal
-    rule — informative on desktop, visually heavy on a small screen, so
-    we strip it here. The footer starts at the first `---` line and runs
-    to end-of-content; we cut there.
-
-    Includes expansion is a safety net for a known upstream race (see
-    project_a0_save_tool_call_race.md); A0's ReplaceIncludeAlias
-    extension normally handles it at response_stream time."""
+    A0's task-stats footer so the phone only sees the actual reply."""
     try:
         logs = agent.context.log.logs
         for item in reversed(logs):
@@ -60,28 +56,49 @@ def _extract_final_text(agent) -> str:
     return ''
 
 
+def _extract_latest_user_message(agent):
+    """Return (text, created_at_ms) for the most recent type='user' log
+    item, or (None, None) if absent. Used by the WebUI-bootstrap branch."""
+    try:
+        logs = agent.context.log.logs
+        for item in reversed(logs):
+            if getattr(item, 'type', None) == 'user':
+                content = getattr(item, 'content', '')
+                if isinstance(content, str):
+                    ts = getattr(item, 'timestamp', None)
+                    ts_ms = int(ts * 1000) if ts else None
+                    return content, ts_ms
+    except Exception:
+        pass
+    return None, None
+
+
 def _strip_task_stats_footer(text: str) -> str:
     """Remove A0's task-stats footer. The footer is appended by the
     _05_task_stats_display monologue_end extension in the form:
 
         <assistant reply text>
+
         ---
         ⏱ Task completed in 4.8s
         <cost table, cache line, daily budget line>
 
-    Cut at the first line that is exactly "---" after some reply text."""
+    Match the unique footer fingerprint: a "---" line whose next
+    non-blank line starts with "⏱ Task completed". Scan from the end
+    so the real footer (always last) wins even on the off chance the
+    reply itself ends with that phrase."""
     if not text:
         return text
     lines = text.splitlines()
-    cut = None
-    for i, line in enumerate(lines):
-        if line.strip() == '---' and i > 0:
-            cut = i
-            break
-    if cut is None:
-        return text
-    trimmed = '\n'.join(lines[:cut]).rstrip()
-    return trimmed
+    for i in range(len(lines) - 1, 0, -1):
+        if lines[i].strip() != '---':
+            continue
+        j = i + 1
+        while j < len(lines) and not lines[j].strip():
+            j += 1
+        if j < len(lines) and lines[j].lstrip().startswith('⏱ Task completed'):
+            return '\n'.join(lines[:i]).rstrip()
+    return text
 
 
 def _safe_expand_includes(text: str) -> str:
@@ -102,36 +119,93 @@ def _append_mirror(context_id: str, record: dict) -> None:
         pass  # mirror is best-effort; A0's own chat.json is the durable record
 
 
+def _publish(bus, event: dict) -> None:
+    with bus['subs_lock']:
+        subs = list(bus['subscribers'])
+    for q in subs:
+        try:
+            q.put_nowait(event)
+        except queue.Full:
+            pass
+
+
 class SeekerzeroFinal(Extension):
 
     async def execute(self, loop_data: LoopData = LoopData(), **kwargs):
         ctx_id = self.agent.context.id
         if not isinstance(ctx_id, str) or not ctx_id.startswith(_MOBILE_CONTEXT_PREFIX):
             return
-        # Only top-level agent finals reach the user.
         if getattr(self.agent, 'number', 0) != 0:
             return
 
         bus = self.agent.context.data.get(_CHAT_BUS_KEY)
         if not bus:
-            return
+            # WebUI started the very first turn on this mobile context
+            # before any phone activity touched it. Lazily bootstrap a
+            # bus so we can mirror + publish for late-joining subscribers.
+            try:
+                from python.api.seekerzero_mobile_api import get_chat_bus
+                bus = get_chat_bus(ctx_id)
+            except Exception:
+                return
 
         with bus['turn_lock']:
             state = bus['turn_state']
             bus['turn_state'] = None
-        if not state:
-            # No turn in flight from the mobile side (e.g. reply was driven
-            # from the web UI on the same context). Nothing to emit.
-            return
 
-        assistant_id = state.get('assistant_id')
-        if not assistant_id:
+        final_text = _extract_final_text(self.agent)
+        now_ms = int(time.time() * 1000)
+
+        if state:
+            # Phone-initiated turn: assistant_id was pre-allocated.
+            assistant_id = state.get('assistant_id')
+            if not assistant_id:
+                with bus['busy_lock']:
+                    bus['busy'] = False
+                return
+            _append_mirror(ctx_id, {
+                'id': assistant_id,
+                'role': 'assistant',
+                'content': final_text,
+                'created_at_ms': now_ms,
+                'is_final': True,
+            })
+            _publish(bus, {
+                'type': 'final',
+                'message_id': assistant_id,
+                'role': 'assistant',
+                'content': final_text,
+                'created_at_ms': now_ms,
+            })
             with bus['busy_lock']:
                 bus['busy'] = False
             return
 
-        final_text = _extract_final_text(self.agent)
-        now_ms = int(time.time() * 1000)
+        # WebUI-initiated turn on a mobile context. Bootstrap user + assistant.
+        user_text, user_ts_ms = _extract_latest_user_message(self.agent)
+        if not user_text and not final_text:
+            return
+
+        user_id = f'msg-u-{uuid.uuid4().hex[:12]}'
+        assistant_id = f'msg-a-{uuid.uuid4().hex[:12]}'
+        user_ts_ms = user_ts_ms or (now_ms - 1)
+
+        if user_text:
+            user_record = {
+                'id': user_id,
+                'role': 'user',
+                'content': user_text,
+                'created_at_ms': user_ts_ms,
+                'is_final': True,
+            }
+            _append_mirror(ctx_id, user_record)
+            _publish(bus, {
+                'type': 'user_msg',
+                'message_id': user_id,
+                'role': 'user',
+                'content': user_text,
+                'created_at_ms': user_ts_ms,
+            })
 
         _append_mirror(ctx_id, {
             'id': assistant_id,
@@ -140,21 +214,10 @@ class SeekerzeroFinal(Extension):
             'created_at_ms': now_ms,
             'is_final': True,
         })
-
-        event = {
+        _publish(bus, {
             'type': 'final',
             'message_id': assistant_id,
             'role': 'assistant',
             'content': final_text,
             'created_at_ms': now_ms,
-        }
-        with bus['subs_lock']:
-            subs = list(bus['subscribers'])
-        for q in subs:
-            try:
-                q.put_nowait(event)
-            except queue.Full:
-                pass
-
-        with bus['busy_lock']:
-            bus['busy'] = False
+        })
