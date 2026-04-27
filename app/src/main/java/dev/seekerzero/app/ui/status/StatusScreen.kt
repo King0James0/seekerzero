@@ -50,6 +50,7 @@ import dev.seekerzero.app.api.models.SubordinateStatus
 import dev.seekerzero.app.ui.components.CardSurface
 import dev.seekerzero.app.ui.components.NavRow
 import dev.seekerzero.app.ui.components.SeekerZeroScaffold
+import dev.seekerzero.app.ui.notifications.BellAction
 import dev.seekerzero.app.util.ConnectionState
 import dev.seekerzero.app.ui.theme.SeekerZeroColors
 import dev.seekerzero.app.SeekerZeroApplication
@@ -68,7 +69,10 @@ fun StatusScreen(viewModel: StatusViewModel = viewModel()) {
     val reconnects by viewModel.reconnectCount.collectAsStateWithLifecycle()
     val health by viewModel.health.collectAsStateWithLifecycle()
 
-    SeekerZeroScaffold(title = "Status") { pad ->
+    SeekerZeroScaffold(
+        title = "Status",
+        actions = { BellAction() }
+    ) { pad ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(pad),
             contentPadding = PaddingValues(16.dp),
@@ -311,8 +315,10 @@ private fun NotificationsCard() {
     val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     val chatChannel = nm.getNotificationChannel(SeekerZeroApplication.CHANNEL_CHAT)
     val schedChannel = nm.getNotificationChannel(SeekerZeroApplication.CHANNEL_SCHEDULED)
+    val alertsChannel = nm.getNotificationChannel(SeekerZeroApplication.CHANNEL_ALERTS)
     val chatEnabled = chatChannel?.importance?.let { it != NotificationManager.IMPORTANCE_NONE } ?: true
     val schedEnabled = schedChannel?.importance?.let { it != NotificationManager.IMPORTANCE_NONE } ?: true
+    val alertsEnabled = alertsChannel?.importance?.let { it != NotificationManager.IMPORTANCE_NONE } ?: true
 
     val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
     val batteryExempt = pm.isIgnoringBatteryOptimizations(context.packageName)
@@ -337,6 +343,11 @@ private fun NotificationsCard() {
                 onClick = { openChannelSettings(context, SeekerZeroApplication.CHANNEL_SCHEDULED) }
             )
             NavRow(
+                label = "Alerts (notify_user)",
+                value = if (alertsEnabled) "On" else "Off",
+                onClick = { openChannelSettings(context, SeekerZeroApplication.CHANNEL_ALERTS) }
+            )
+            NavRow(
                 label = "Battery optimization",
                 value = if (batteryExempt) "Exempt" else "Optimized",
                 onClick = {
@@ -350,7 +361,11 @@ private fun NotificationsCard() {
             )
             NavRow(
                 label = "Send test — scheduled",
-                onClick = { NotificationHelper.fireTest(context, SeekerZeroApplication.CHANNEL_SCHEDULED) },
+                onClick = { NotificationHelper.fireTest(context, SeekerZeroApplication.CHANNEL_SCHEDULED) }
+            )
+            NavRow(
+                label = "Send test — alerts",
+                onClick = { NotificationHelper.fireTest(context, SeekerZeroApplication.CHANNEL_ALERTS) },
                 isLast = true
             )
         }

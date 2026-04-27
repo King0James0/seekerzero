@@ -49,9 +49,11 @@ import androidx.navigation.compose.rememberNavController
 import dev.seekerzero.app.R
 import dev.seekerzero.app.chat.ChatRepository
 import dev.seekerzero.app.config.ConfigManager
+import dev.seekerzero.app.notifications.NotificationsRepository
 import dev.seekerzero.app.service.SeekerZeroService
 import dev.seekerzero.app.ui.chat.ChatDrawerContent
 import dev.seekerzero.app.ui.chat.ChatScreen
+import dev.seekerzero.app.ui.notifications.NotificationsDialog
 import dev.seekerzero.app.ui.status.StatusScreen
 import dev.seekerzero.app.ui.tasks.TaskComposerScreen
 import dev.seekerzero.app.ui.tasks.TasksScreen
@@ -84,6 +86,10 @@ fun MainScaffold() {
 
     LaunchedEffect(Unit) {
         SeekerZeroService.start(context)
+        // Initial bell-state hydration. Subsequent updates flow through the
+        // service's push poller (which calls NotificationsRepository.onPushArrived)
+        // and through the modal's own on-attach refresh.
+        NotificationsRepository.refresh()
     }
 
     // Notification-tap deep link: a coroutine collects pendingInitialTab
@@ -100,6 +106,16 @@ fun MainScaffold() {
             }
         }
         ConfigManager.pendingInitialTab = null
+    }
+
+    // Notification-tap → open the bell modal. Driven by an intent extra
+    // set in SeekerZeroService.firePushNotification for webui_bell rows.
+    val pendingBell by ConfigManager.pendingShowNotificationsFlow.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingBell) {
+        if (pendingBell) {
+            NotificationsRepository.openOverlay()
+            ConfigManager.pendingShowNotifications = false
+        }
     }
 
     // Custom drawer state. Plain boolean — drawer opens only via the
@@ -193,6 +209,14 @@ fun MainScaffold() {
                     composable("status") { StatusScreen() }
                 }
             }
+        }
+
+        // Global notifications dialog. Lives at MainScaffold level so it's
+        // shared across all four tabs and can be opened from a notification
+        // tap (deep-link path) the same way as a bell-icon tap.
+        val bellOpen by NotificationsRepository.overlayOpen.collectAsStateWithLifecycle()
+        if (bellOpen) {
+            NotificationsDialog(onDismiss = { NotificationsRepository.closeOverlay() })
         }
 
         // Custom drawer overlay. Animates in/out; tapping the scrim closes.

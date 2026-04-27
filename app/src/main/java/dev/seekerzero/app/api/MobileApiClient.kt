@@ -6,6 +6,12 @@ import dev.seekerzero.app.api.models.ChatHistoryResponse
 import dev.seekerzero.app.api.models.ChatSendRequest
 import dev.seekerzero.app.api.models.ChatSendResponse
 import dev.seekerzero.app.api.models.HealthResponse
+import dev.seekerzero.app.api.models.NotificationsDeleteRequest
+import dev.seekerzero.app.api.models.NotificationsDeleteResponse
+import dev.seekerzero.app.api.models.NotificationsListResponse
+import dev.seekerzero.app.api.models.NotificationsMarkReadRequest
+import dev.seekerzero.app.api.models.NotificationsMarkReadResponse
+import dev.seekerzero.app.api.models.NotificationsUnreadCountResponse
 import dev.seekerzero.app.api.models.PushAckRequest
 import dev.seekerzero.app.api.models.PushAckResponse
 import dev.seekerzero.app.api.models.PushPendingResponse
@@ -230,6 +236,113 @@ object MobileApiClient {
             )
             json.decodeFromString(PushAckResponse.serializer(), body)
         }.onFailure { LogCollector.w(TAG, "pushAck() failed: ${it.message}") }
+    }
+
+    suspend fun notificationsList(
+        sinceMs: Long = 0L,
+        limit: Int = 100,
+    ): Result<NotificationsListResponse> {
+        if (ConfigManager.demoMode) return Result.success(
+            NotificationsListResponse(ok = true, items = emptyList(), unreadCount = 0)
+        )
+        return runCatching {
+            val url = buildUrl("/notifications/list").toHttpUrl().newBuilder()
+                .addQueryParameter("since_ms", sinceMs.toString())
+                .addQueryParameter("limit", limit.toString())
+                .build()
+                .toString()
+            LogCollector.d(TAG, "GET $url")
+            val body = execute(client, Request.Builder().url(url).get().build())
+            json.decodeFromString(NotificationsListResponse.serializer(), body)
+        }.onFailure { LogCollector.w(TAG, "notificationsList() failed: ${it.message}") }
+    }
+
+    suspend fun notificationsMarkRead(
+        ids: List<Long>? = null,
+        all: Boolean = false,
+    ): Result<NotificationsMarkReadResponse> {
+        if (ConfigManager.demoMode) return Result.success(
+            NotificationsMarkReadResponse(ok = true, marked = 0, unreadCount = 0)
+        )
+        return runCatching {
+            val url = buildUrl("/notifications/mark_read")
+            val req = NotificationsMarkReadRequest(
+                ids = if (all) null else (ids ?: emptyList()),
+                all = if (all) true else null,
+            )
+            val bodyJson = json.encodeToString(NotificationsMarkReadRequest.serializer(), req)
+            LogCollector.d(TAG, "POST $url all=$all idsN=${ids?.size ?: 0}")
+            val body = execute(
+                client,
+                Request.Builder().url(url).post(bodyJson.toRequestBody(jsonMediaType)).build()
+            )
+            json.decodeFromString(NotificationsMarkReadResponse.serializer(), body)
+        }.onFailure { LogCollector.w(TAG, "notificationsMarkRead() failed: ${it.message}") }
+    }
+
+    suspend fun notificationsUnreadCount(): Result<NotificationsUnreadCountResponse> {
+        if (ConfigManager.demoMode) return Result.success(NotificationsUnreadCountResponse(ok = true, count = 0))
+        return runCatching {
+            val url = buildUrl("/notifications/unread_count")
+            LogCollector.d(TAG, "GET $url")
+            val body = execute(client, Request.Builder().url(url).get().build())
+            json.decodeFromString(NotificationsUnreadCountResponse.serializer(), body)
+        }.onFailure { LogCollector.w(TAG, "notificationsUnreadCount() failed: ${it.message}") }
+    }
+
+    /**
+     * Download an A0-produced file via /mobile/files/get and write it to
+     * `dest`. Returns Result.success(dest) on a 2xx response with the file
+     * fully written; the body is streamed so this is safe for a few MB.
+     * The server enforces a 25 MB cap and an allowlist; we forward errors
+     * verbatim.
+     */
+    suspend fun fetchFile(serverPath: String, dest: java.io.File): Result<java.io.File> {
+        if (ConfigManager.demoMode) return Result.failure(IllegalStateException("demo mode"))
+        return runCatching {
+            val url = buildUrl("/files/get").toHttpUrl().newBuilder()
+                .addQueryParameter("path", serverPath)
+                .build()
+                .toString()
+            LogCollector.d(TAG, "GET $url")
+            withContext(Dispatchers.IO) {
+                val response = client.newCall(Request.Builder().url(url).get().build()).execute()
+                response.use { resp ->
+                    if (!resp.isSuccessful) {
+                        throw IOException("HTTP ${resp.code}: ${resp.message}")
+                    }
+                    val body = resp.body ?: throw IOException("empty body")
+                    dest.parentFile?.mkdirs()
+                    dest.outputStream().use { out ->
+                        body.byteStream().use { input -> input.copyTo(out) }
+                    }
+                }
+                dest
+            }
+        }.onFailure { LogCollector.w(TAG, "fetchFile($serverPath) failed: ${it.message}") }
+    }
+
+    suspend fun notificationsDelete(
+        ids: List<Long>? = null,
+        all: Boolean = false,
+    ): Result<NotificationsDeleteResponse> {
+        if (ConfigManager.demoMode) return Result.success(
+            NotificationsDeleteResponse(ok = true, deleted = 0, unreadCount = 0)
+        )
+        return runCatching {
+            val url = buildUrl("/notifications/delete")
+            val req = NotificationsDeleteRequest(
+                ids = if (all) null else (ids ?: emptyList()),
+                all = if (all) true else null,
+            )
+            val bodyJson = json.encodeToString(NotificationsDeleteRequest.serializer(), req)
+            LogCollector.d(TAG, "POST $url all=$all idsN=${ids?.size ?: 0}")
+            val body = execute(
+                client,
+                Request.Builder().url(url).post(bodyJson.toRequestBody(jsonMediaType)).build()
+            )
+            json.decodeFromString(NotificationsDeleteResponse.serializer(), body)
+        }.onFailure { LogCollector.w(TAG, "notificationsDelete() failed: ${it.message}") }
     }
 
     suspend fun taskDelete(uuid: String): Result<Unit> {

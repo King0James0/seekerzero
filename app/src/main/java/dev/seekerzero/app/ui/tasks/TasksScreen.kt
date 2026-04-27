@@ -26,6 +26,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -43,6 +46,7 @@ import dev.seekerzero.app.R
 import dev.seekerzero.app.api.models.TaskDto
 import dev.seekerzero.app.ui.components.CardSurface
 import dev.seekerzero.app.ui.components.SeekerZeroScaffold
+import dev.seekerzero.app.ui.notifications.BellAction
 import dev.seekerzero.app.ui.theme.SeekerZeroColors
 import dev.seekerzero.app.ui.theme.seekerZeroSwitchColors
 
@@ -72,6 +76,7 @@ fun TasksScreen(
     SeekerZeroScaffold(
         title = stringResource(R.string.tab_tasks),
         actions = {
+            BellAction()
             IconButton(onClick = onCompose) {
                 Icon(
                     imageVector = Icons.Outlined.Add,

@@ -18,6 +18,12 @@ import coil.compose.AsyncImage
 import dev.seekerzero.app.api.MobileApiClient
 import dev.seekerzero.app.chat.AudioPlaybackController
 import dev.seekerzero.app.config.ConfigManager
+import dev.seekerzero.app.files.FileOpener
+import androidx.compose.foundation.text.ClickableText
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.DisposableEffect
@@ -67,6 +73,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,8 +92,10 @@ import dev.seekerzero.app.R
 import dev.seekerzero.app.chat.PendingAttachment
 import dev.seekerzero.app.ui.components.CardSurface
 import dev.seekerzero.app.ui.components.SeekerZeroScaffold
+import dev.seekerzero.app.ui.notifications.BellAction
 import dev.seekerzero.app.ui.theme.SeekerZeroColors
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun ChatScreen(
@@ -116,7 +125,11 @@ fun ChatScreen(
     val activeTitle = contexts.firstOrNull { it.id == activeContextId }?.displayName
         ?: stringResource(R.string.tab_chat)
 
-    SeekerZeroScaffold(title = activeTitle, onMenu = onMenu) { pad ->
+    SeekerZeroScaffold(
+        title = activeTitle,
+        onMenu = onMenu,
+        actions = { BellAction() }
+    ) { pad ->
         Column(modifier = Modifier.fillMaxSize().padding(pad)) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 if (messages.isEmpty()) {
@@ -307,10 +320,10 @@ private fun MessageBubble(message: ChatMessage) {
                     } else {
                         message.content
                     }
-                    Text(
+                    BubbleText(
                         text = displayContent,
-                        color = SeekerZeroColors.TextPrimary,
-                        fontSize = 14.sp
+                        enableLinks = !isUser && message.isFinal,
+                        context = context
                     )
                 }
             }
@@ -344,6 +357,66 @@ private fun MessageBubble(message: ChatMessage) {
         }
     }
 }
+
+/**
+ * Bubble body renderer. For final assistant messages, scans the text for
+ * absolute /a0/{workdir,projects,seekerzero}/...filename.ext paths and
+ * renders them as tappable underlined spans. Tap → FileOpener fetches the
+ * file and fires ACTION_VIEW. Streaming and user bubbles use the plain
+ * Text renderer to avoid mid-token re-tokenization.
+ */
+@Composable
+private fun BubbleText(text: String, enableLinks: Boolean, context: android.content.Context) {
+    if (!enableLinks) {
+        Text(text = text, color = SeekerZeroColors.TextPrimary, fontSize = 14.sp)
+        return
+    }
+    val matches = A0_PATH_REGEX.findAll(text).toList()
+    if (matches.isEmpty()) {
+        Text(text = text, color = SeekerZeroColors.TextPrimary, fontSize = 14.sp)
+        return
+    }
+    val annotated = buildAnnotatedString {
+        var cursor = 0
+        for (m in matches) {
+            if (m.range.first > cursor) append(text.substring(cursor, m.range.first))
+            val path = m.value
+            pushStringAnnotation(tag = "a0_path", annotation = path)
+            withStyle(
+                SpanStyle(
+                    color = SeekerZeroColors.Primary,
+                    textDecoration = TextDecoration.Underline
+                )
+            ) { append(path) }
+            pop()
+            cursor = m.range.last + 1
+        }
+        if (cursor < text.length) append(text.substring(cursor))
+    }
+    val scope = rememberCoroutineScope()
+    ClickableText(
+        text = annotated,
+        style = androidx.compose.ui.text.TextStyle(
+            color = SeekerZeroColors.TextPrimary,
+            fontSize = 14.sp
+        ),
+        onClick = { offset ->
+            annotated.getStringAnnotations(tag = "a0_path", start = offset, end = offset)
+                .firstOrNull()?.let { ann ->
+                    scope.launch {
+                        FileOpener.openFromServer(context, ann.item)
+                    }
+                }
+        }
+    )
+}
+
+// Matches absolute paths under one of the allowlisted A0 roots that look
+// like files (have a basename + extension). Mirrors the server-side
+// _FILE_GET_ROOTS so over-detection is impossible.
+private val A0_PATH_REGEX = Regex(
+    """/a0/usr/(?:workdir|projects|seekerzero)/[A-Za-z0-9_./\-]+\.[A-Za-z0-9]{1,8}"""
+)
 
 @Composable
 private fun Avatar(isUser: Boolean) {

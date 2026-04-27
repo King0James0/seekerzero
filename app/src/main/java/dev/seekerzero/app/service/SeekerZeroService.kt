@@ -21,10 +21,12 @@ import dev.seekerzero.app.SeekerZeroApplication
 import dev.seekerzero.app.api.MobileApiClient
 import dev.seekerzero.app.chat.ChatRepository
 import dev.seekerzero.app.config.ConfigManager
+import dev.seekerzero.app.notifications.NotificationsRepository
 import dev.seekerzero.app.util.ConnectionState
 import dev.seekerzero.app.util.LogCollector
 import dev.seekerzero.app.util.ServiceState
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +60,7 @@ class SeekerZeroService : Service() {
         private const val PUSH_RETRY_DELAY_MS = 5_000L
         const val EXTRA_CONTEXT_ID = "seekerzero.extra.context_id"
         const val EXTRA_INITIAL_TAB = "seekerzero.extra.initial_tab"
+        const val EXTRA_OPEN_NOTIFICATIONS = "seekerzero.extra.open_notifications"
 
         fun start(context: Context) {
             val intent = Intent(context, SeekerZeroService::class.java)
@@ -273,6 +276,9 @@ class SeekerZeroService : Service() {
                         for (item in resp.items) {
                             firePushNotification(item)
                         }
+                        // Hydrate the bell repo so the badge updates without
+                        // waiting for the user to tap it. Best-effort.
+                        NotificationsRepository.onPushArrived()
                         val ids = resp.items.map { it.id }
                         MobileApiClient.pushAck(ids)
                             .onFailure {
@@ -297,9 +303,18 @@ class SeekerZeroService : Service() {
     }
 
     private fun firePushNotification(item: dev.seekerzero.app.api.models.PushItem) {
+        val source = (item.payload?.get("source") as? JsonPrimitive)?.let {
+            if (it.isString) it.content else null
+        }
         val openIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             applyDeepLink(this, item.deepLink)
+            // Webui-bridged notifications (notify_user) tap into the bell
+            // modal rather than the chat tab. Scheduler deliveries keep
+            // their existing behavior (deep_link → chat).
+            if (source == "webui_bell") {
+                putExtra(EXTRA_OPEN_NOTIFICATIONS, true)
+            }
         }
         val pendingIntent = PendingIntent.getActivity(
             this,
@@ -309,12 +324,20 @@ class SeekerZeroService : Service() {
         )
         val preview = if (item.body.length <= CHAT_NOTIFICATION_PREVIEW_CHARS) item.body
             else item.body.take(CHAT_NOTIFICATION_PREVIEW_CHARS).trimEnd() + "…"
-        val notif = NotificationCompat.Builder(this, SeekerZeroApplication.CHANNEL_SCHEDULED)
+        // payload.source distinguishes scheduler-delivery rows from rows
+        // bridged in via NotificationManager.add_notification (notify_user
+        // and friends). Each gets its own channel so the user can mute one
+        // independently of the other.
+        val channel = if (source == "webui_bell") SeekerZeroApplication.CHANNEL_ALERTS
+            else SeekerZeroApplication.CHANNEL_SCHEDULED
+        val category = if (source == "webui_bell") NotificationCompat.CATEGORY_MESSAGE
+            else NotificationCompat.CATEGORY_REMINDER
+        val notif = NotificationCompat.Builder(this, channel)
             .setContentTitle(item.title.ifBlank { "Agent Zero" })
             .setContentText(preview)
             .setStyle(NotificationCompat.BigTextStyle().bigText(preview))
             .setSmallIcon(android.R.drawable.ic_menu_send)
-            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setCategory(category)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
@@ -325,7 +348,7 @@ class SeekerZeroService : Service() {
         // deliveries don't collapse into each other.
         val notifId = PUSH_NOTIFICATION_ID_BASE + (item.id.toInt() and 0x0fffffff)
         nm.notify(notifId, notif)
-        LogCollector.d(TAG, "posted scheduled push id=${item.id} title=${item.title}")
+        LogCollector.d(TAG, "posted push id=${item.id} ch=$channel title=${item.title}")
     }
 
     /**

@@ -18,6 +18,7 @@ object NotificationHelper {
 
     private const val TEST_NOTIFICATION_ID_CHAT = 9001
     private const val TEST_NOTIFICATION_ID_SCHEDULED = 9002
+    private const val TEST_NOTIFICATION_ID_ALERTS = 9003
 
     fun fireTest(context: Context, channelId: String) {
         val openIntent = Intent(context, MainActivity::class.java).apply {
@@ -34,6 +35,8 @@ object NotificationHelper {
                 "Chat test" to "If you see this, chat-reply notifications are working."
             SeekerZeroApplication.CHANNEL_SCHEDULED ->
                 "Scheduled test" to "If you see this, scheduled-delivery notifications are working."
+            SeekerZeroApplication.CHANNEL_ALERTS ->
+                "Alerts test" to "If you see this, alerts (notify_user) notifications are working."
             else ->
                 "SeekerZero test" to "If you see this, notifications are working."
         }
@@ -50,6 +53,7 @@ object NotificationHelper {
         val id = when (channelId) {
             SeekerZeroApplication.CHANNEL_CHAT -> TEST_NOTIFICATION_ID_CHAT
             SeekerZeroApplication.CHANNEL_SCHEDULED -> TEST_NOTIFICATION_ID_SCHEDULED
+            SeekerZeroApplication.CHANNEL_ALERTS -> TEST_NOTIFICATION_ID_ALERTS
             else -> TEST_NOTIFICATION_ID_CHAT
         }
         nm.notify(id, notif)

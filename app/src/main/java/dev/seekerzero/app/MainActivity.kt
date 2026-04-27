@@ -41,5 +41,8 @@ class MainActivity : FragmentActivity() {
         intent.getStringExtra(SeekerZeroService.EXTRA_INITIAL_TAB)?.let { tab ->
             if (tab.isNotBlank()) ConfigManager.pendingInitialTab = tab
         }
+        if (intent.getBooleanExtra(SeekerZeroService.EXTRA_OPEN_NOTIFICATIONS, false)) {
+            ConfigManager.pendingShowNotifications = true
+        }
     }
 }

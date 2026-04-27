@@ -58,6 +58,15 @@ object ConfigManager {
         get() = _pendingInitialTab.value
         set(value) { _pendingInitialTab.value = value }
 
+    // Intent-delivered request to open the bell modal. MainScaffold flips
+    // NotificationsRepository.overlayOpen and clears this. Same one-shot
+    // semantics as pendingInitialTab.
+    private val _pendingShowNotifications = MutableStateFlow(false)
+    val pendingShowNotificationsFlow: StateFlow<Boolean> = _pendingShowNotifications
+    var pendingShowNotifications: Boolean
+        get() = _pendingShowNotifications.value
+        set(value) { _pendingShowNotifications.value = value }
+
     private val _demoMode = MutableStateFlow(false)
     val demoModeFlow: StateFlow<Boolean> = _demoMode
 

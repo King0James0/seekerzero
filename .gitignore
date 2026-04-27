@@ -37,3 +37,6 @@ Thumbs.db
 
 # Dev-only QR output from tools/generate_qr.py
 seeker-config-qr.png
+
+# Local working dir for canonical-file edits pulled from a0prod
+.tmp/

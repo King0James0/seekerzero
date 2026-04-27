@@ -54,6 +54,7 @@ import dev.seekerzero.app.R
 import dev.seekerzero.app.ssh.BiometricGate
 import dev.seekerzero.app.ui.components.CardSurface
 import dev.seekerzero.app.ui.components.SeekerZeroScaffold
+import dev.seekerzero.app.ui.notifications.BellAction
 import dev.seekerzero.app.ui.theme.SeekerZeroColors
 import kotlinx.coroutines.launch
 
@@ -88,7 +89,10 @@ fun TerminalScreen(viewModel: TerminalViewModel = viewModel()) {
         if (state is TerminalState.Locked) launchBiometric()
     }
 
-    SeekerZeroScaffold(title = stringResource(R.string.tab_terminal)) { pad ->
+    SeekerZeroScaffold(
+        title = stringResource(R.string.tab_terminal),
+        actions = { BellAction() }
+    ) { pad ->
         Column(modifier = Modifier.fillMaxSize().padding(pad)) {
             when (val s = state) {
                 is TerminalState.Locked -> LockedView(onUnlock = launchBiometric)

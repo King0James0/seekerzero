@@ -30,6 +30,10 @@ class SeekerZeroApplication : Application(), ImageLoaderFactory {
         // asynchronous push delivery that originates server-side (not a
         // direct response to something the user just sent).
         const val CHANNEL_SCHEDULED = "seekerzero_scheduled"
+        // High-importance channel for the unified bell: notify_user calls
+        // and any other webui-style notification bridged in via
+        // NotificationManager.add_notification.
+        const val CHANNEL_ALERTS = "seekerzero_alerts"
     }
 
     override fun onCreate() {
@@ -80,6 +84,18 @@ class SeekerZeroApplication : Application(), ImageLoaderFactory {
             lockscreenVisibility = Notification.VISIBILITY_PRIVATE
         }
         nm.createNotificationChannel(scheduledChannel)
+
+        val alertsChannel = NotificationChannel(
+            CHANNEL_ALERTS,
+            "Alerts",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Webui-bridged notifications: notify_user, agent alerts, system events."
+            setShowBadge(true)
+            enableVibration(true)
+            lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+        }
+        nm.createNotificationChannel(alertsChannel)
 
         // Demo mode: kick off a one-time avatar download on a background
         // coroutine. Safe if the network is unavailable — falls through to
